@@ -1,5 +1,9 @@
 # Marstek Venus E3 – Smartes Laden & Entladen per Home Assistant Blueprint
 
+> [!WARNING]  
+> **BETA VERSION:** This is the first beta release. It has currently only been tested successfully on my personal system. Use this blueprint at your own risk. The author assumes no liability for any damage to your hardware or unexpected system behavior.
+
+
 Dieses Repository enthält ein **Home‑Assistant Blueprint** zur dynamischen Regelung von Lade- und Entladeleistung eines **Marstek Venus E3** Batteriespeichers.  
 Ziel ist es, den **Netzbezug** und die **Netzeinspeisung** möglichst nahe bei 0 W zu halten – innerhalb eines konfigurierbaren **Deadbands** – ohne starkes Schwingen.
 
