@@ -1,5 +1,8 @@
 # Marstek Venus E3 – Smartes Laden & Entladen per Home Assistant Blueprint
 
+> [update 9.Mar.2026 new relase: marstek_blueprint.yaml published]
+
+
 > [!WARNING]  
 > **BETA VERSION:** This is the first beta release. It has currently only been tested successfully on my personal system. Use this blueprint at your own risk. The author assumes no liability for any damage to your hardware or unexpected system behavior.
 
