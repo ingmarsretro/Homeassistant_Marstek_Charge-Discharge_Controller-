@@ -1,0 +1,495 @@
+# Marstek Speicher: Lade-Entlade-Regelung mit force-mode
+# Blueprint – alle Entitäten und Parameter über die GUI einstellbar
+# Ablage: config/blueprints/automation/marstek/ (Ordner anlegen)
+
+blueprint:
+  name: Marstek Speicher Lade-Entlade-Regelung
+  description: |
+    Steuert einen Marstek/Venus Speicher (Modbus RS485) anhand des Netzbezugs
+    und der Einspeisung: Bei Überschuss (Einspeisung) wird geladen, bei Bedarf
+    (Bezug) wird entladen. Nutzt Hysterese (Deadband), schrittweise Anpassung
+    der Lade-/Entladeleistung und optional den Venus-Force-Mode (Laden/Stopp/Entladen).
+    Erfordert passende Helfer (input_number für Limits, ggf. Sensoren in kW oder W).
+  domain: automation
+  input:
+    # ---- Entitäten (mit genauer Erklärung) ----
+    sensor_grid_export:
+      name: Zähler Einspeisung (Export)
+      description: "Sensor für ins Netz eingespeiste Leistung. Einheit über 'Grid-Zähler-Einheit' (W oder kW) wählbar. Typisch: sensor.xxx_power_usage_out oder sensor.xxx_export."
+      selector:
+        entity:
+          domain: sensor
+    sensor_grid_import:
+      name: Zähler Bezug (Import)
+      description: "Sensor für aus dem Netz bezogene Leistung. Gleiche Einheit wie Einspeisung (W oder kW). Typisch: sensor.xxx_power_usage_in oder sensor.xxx_import."
+      selector:
+        entity:
+          domain: sensor
+    switch_steuermodus:
+      name: Schalter Steuermodus (RS485)
+      description: "Schalter, der den RS485-Steuermodus ein-/ausschaltet. Wird bei 'aus' automatisch wieder eingeschaltet, damit die Regelung aktiv bleibt."
+      selector:
+        entity:
+          domain: switch
+    number_ladeleistung:
+      name: Zahl Ladeleistung einstellen
+      description: "Number-Entity zum Setzen der Ladeleistung (in Watt). Wird von der Automation kontinuierlich angepasst."
+      selector:
+        entity:
+          domain: number
+    number_entladeleistung:
+      name: Zahl Entladeleistung einstellen
+      description: "Number-Entity zum Setzen der Entladeleistung (in Watt). Wird von der Automation kontinuierlich angepasst."
+      selector:
+        entity:
+          domain: number
+    input_number_ladeleistung_limit:
+      name: Helfer Max. Ladeleistung (input_number)
+      description: "Input-Number-Helfer: maximal erlaubte Ladeleistung in Watt. Obergrenze für die automatisch gesetzte Ladeleistung."
+      selector:
+        entity:
+          domain: input_number
+    sensor_soc:
+      name: Sensor Batterie-Ladezustand (SOC)
+      description: "Sensor für den aktuellen Batterie-Ladezustand in Prozent (0–100). Typisch: sensor.xxx_batterie_ladezustand oder sensor.xxx_soc."
+      selector:
+        entity:
+          domain: sensor
+    input_number_max_soc:
+      name: Helfer Max. SOC (input_number)
+      description: "Input-Number-Helfer: maximaler Ladezustand in %, bis zu dem geladen wird. Darüber wird die Ladeleistung auf 0 gesetzt."
+      selector:
+        entity:
+          domain: input_number
+    input_number_min_soc:
+      name: Helfer Min. SOC (input_number)
+      description: "Input-Number-Helfer: minimaler Ladezustand in %, unter dem nicht entladen wird (Schutz vor Tiefentladung)."
+      selector:
+        entity:
+          domain: input_number
+    select_force_mode:
+      name: Select Force-Mode (Laden/Stopp/Entladen)
+      description: "Select-Entity für den Venus-Force-Mode. Optionen z. B. 'charge', 'stop', 'discharge'. Leer lassen, wenn nicht vorhanden – dann wird dieser Block übersprungen."
+      selector:
+        entity:
+          domain: select
+
+    # ---- Grid-Zähler-Einheit (W oder kW) ----
+    grid_smartmeter_format:
+      name: Grid-Zähler-Einheit
+      description: "Einheit der Grid-Sensoren (Einspeisung/Bezug): Kilowatt (kW) – Werte werden intern in Watt umgerechnet. Watt (W) – Werte werden unverändert verwendet."
+      default: "kW"
+      selector:
+        select:
+          options:
+            - label: "Kilowatt (kW)"
+              value: "1000"
+            - label: "Watt (W)"
+              value: "1"
+
+    # ---- Zeiten (tuneable) ----
+    trigger_interval_seconds:
+      name: Trigger-Intervall (Sekunden)
+      description: "Wie oft die Logik zusätzlich zu Zähler-/Schalter-Änderungen ausgeführt wird (time_pattern). Kleinere Werte = reaktiver, höhere CPU-Last. Typisch 5–30."
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          step: 1
+    delay_charge_seconds:
+      name: Verzögerung nach Lade-Anpassung (Sekunden)
+      description: "Wartezeit nach einer Erhöhung der Ladeleistung, bevor weiter geregelt wird. Verhindert zu schnelles Nachregeln. Typisch 1–2."
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 1
+    delay_discharge_seconds:
+      name: Verzögerung nach Entlade-/Reduktion-Anpassung (Sekunden)
+      description: "Wartezeit nach Anpassung der Entladeleistung oder Reduktion der Ladeleistung. Typisch 4–5."
+      default: 4
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+
+    # ---- Deadband und Hysterese (tuneable) ----
+    deadband_margin_w:
+      name: Deadband / Soll-Reserve (Watt)
+      description: "Toleranz um die Soll-Einspeisung/Bezug: Regelung reagiert erst, wenn Abweichung größer als dieser Wert (in W). Größere Werte = weniger Schaltzyklen, weniger feine Anpassung. Typisch 5–20."
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: W
+    safety_reserve_export_w:
+      name: Sicherheitsreserve Einspeisung (Watt)
+      description: "Wird von der gemessenen Einspeisung abgezogen, bevor Überschuss berechnet wird. Kleine Reserve, um leichte Negativwerte zu vermeiden. Typisch 0–10."
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 1
+          unit_of_measurement: W
+    charge_step_w:
+      name: Lade-Schritt (Watt pro Zyklus)
+      description: "Maximale Änderung der Ladeleistung pro Ausführung in Watt. Kleiner = sanfter, größer = schneller. Typisch 50–100."
+      default: 70
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 10
+          unit_of_measurement: W
+    discharge_step_w:
+      name: Entlade-Schritt Erhöhen (Watt pro Zyklus)
+      description: "Maximale Erhöhung der Entladeleistung pro Zyklus beim Ausgleich von Netzbezug. Typisch 80–150."
+      default: 100
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 10
+          unit_of_measurement: W
+    discharge_reduction_step_w:
+      name: Entlade-Schritt Reduzieren (Watt pro Zyklus)
+      description: "Maximale Reduzierung der Entladeleistung pro Zyklus, wenn Einspeisung hoch ist. Typisch 80–150."
+      default: 100
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 10
+          unit_of_measurement: W
+    charge_reduction_step_w:
+      name: Lade-Schritt Reduzieren (Watt pro Zyklus)
+      description: "Maximale Reduzierung der Ladeleistung pro Zyklus bei Bezug oder fehlendem Überschuss. Typisch 80–150."
+      default: 100
+      selector:
+        number:
+          min: 10
+          max: 500
+          step: 10
+          unit_of_measurement: W
+    max_discharge_w:
+      name: Max. Entladeleistung (Watt)
+      description: "Obergrenze für die automatisch gesetzte Entladeleistung in Watt. Gerätespezifisch (z. B. 1250)."
+      default: 1250
+      selector:
+        number:
+          min: 100
+          max: 10000
+          step: 50
+          unit_of_measurement: W
+
+    # Schwellen (W) ab denen reagiert wird – können über Deadband abgedeckt sein
+    threshold_react_w:
+      name: Reaktions-Schwelle Überschuss/Bezug (Watt)
+      description: "Untergrenze: Regelung läuft nur, wenn Überschuss oder Bezug größer als dieser Wert (in W). Verhindert Reaktion auf Rauschen. Typisch 10."
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: W
+
+triggers:
+  - trigger: state
+    entity_id:
+      - !input sensor_grid_export
+  - trigger: state
+    entity_id:
+      - !input sensor_grid_import
+  - trigger: state
+    entity_id: !input switch_steuermodus
+    to: "off"
+  - trigger: time_pattern
+    seconds: !input trigger_interval_seconds
+
+conditions: []
+
+actions:
+  # Variablen: Grid in Watt (mit wählbarem Multiplikator kW→W), Limits, SOC
+  - variables:
+      _export_raw: "{{ states('!input sensor_grid_export') | float(0) }}"
+      _import_raw: "{{ states('!input sensor_grid_import') | float(0) }}"
+      _mult: !input grid_smartmeter_format
+      grid_export_w: "{{ (_export_raw * (_mult | int)) | round(0) }}"
+      grid_import_w: "{{ (_import_raw * (_mult | int)) | round(0) }}"
+      safety_reserve: !input safety_reserve_export_w
+      aktueller_ueberschuss_w: "{{ [grid_export_w - safety_reserve, 0] | max | round(0) }}"
+      gesetzte_ladeleistung: "{{ states('!input number_ladeleistung') | float(0) }}"
+      gesetzte_entladeleistung: "{{ states('!input number_entladeleistung') | float(0) }}"
+      max_limit: "{{ states('!input input_number_ladeleistung_limit') | float(1000) }}"
+      soc_now: "{{ states('!input sensor_soc') | float(0) }}"
+      max_soc: "{{ states('!input input_number_max_soc') | float(100) }}"
+      margin: !input deadband_margin_w
+      thresh: !input threshold_react_w
+
+  # Steuermodus wieder einschalten, falls aus
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: !input switch_steuermodus
+            state: "off"
+        sequence:
+          - action: switch.turn_on
+            target:
+              entity_id: !input switch_steuermodus
+
+  # SOC >= max_soc → Ladeleistung auf 0
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ soc_now >= max_soc and gesetzte_ladeleistung > 0 }}"
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: !input number_ladeleistung
+            data:
+              value: 0
+
+  # Gleichzeitig Laden und Entladen vermeiden: eine Richtung stoppen
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ gesetzte_ladeleistung > 0 and gesetzte_entladeleistung > 0 }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ grid_import_w > grid_export_w }}"
+                sequence:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input number_ladeleistung
+                    data:
+                      value: 0
+              - conditions:
+                  - condition: template
+                    value_template: "{{ grid_export_w >= grid_import_w }}"
+                sequence:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input number_entladeleistung
+                    data:
+                      value: 0
+
+  # Hauptlogik: Überschuss → Laden; Bezug → Entladen; Reduktion bei Gegenlage
+  - choose:
+      # Überschuss → Ladeleistung erhöhen (mit Schritt + Deadband)
+      - conditions:
+          - condition: template
+            value_template: "{{ aktueller_ueberschuss_w > thresh }}"
+          - condition: template
+            value_template: "{{ (aktueller_ueberschuss_w - gesetzte_ladeleistung) | abs > thresh }}"
+          - condition: template
+            value_template: "{{ soc_now < max_soc }}"
+        sequence:
+          - variables:
+              charge_step: !input charge_step_w
+              neue_ladeleistung: >
+                {% set export = grid_export_w | float %}
+                {% set current = gesetzte_ladeleistung | float %}
+                {% set step = charge_step | float %}
+                {% set margin = margin | float %}
+                {% set target = [current + export - margin, max_limit | float] | min %}
+                {% set target = [target, 0] | max %}
+                {% if target > current %}
+                  {{ [current + step, target] | min }}
+                {% elif target < current %}
+                  {{ [current - step, target] | max }}
+                {% else %}
+                  {{ current }}
+                {% endif %}
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ states('!input number_entladeleistung') | float(0) > 0 }}"
+                sequence:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input number_entladeleistung
+                    data:
+                      value: 0
+          - action: number.set_value
+            target:
+              entity_id: !input number_ladeleistung
+            data:
+              value: "{{ neue_ladeleistung | float(0) }}"
+          - delay:
+              seconds: !input delay_charge_seconds
+
+      # Bezug und keine Ladeleistung → Entladeleistung erhöhen (über min_soc)
+      - conditions:
+          - condition: template
+            value_template: "{{ grid_import_w > thresh }}"
+          - condition: template
+            value_template: "{{ gesetzte_ladeleistung <= 0 }}"
+          - condition: template
+            value_template: "{{ states('!input sensor_soc') | float(0) > states('!input input_number_min_soc') | float(0) }}"
+        sequence:
+          - variables:
+              discharge_step: !input discharge_step_w
+              max_discharge: !input max_discharge_w
+              neue_entladeleistung: >
+                {% set imp = grid_import_w | float %}
+                {% set current = gesetzte_entladeleistung | float %}
+                {% set step = discharge_step | float %}
+                {% set margin = margin | float %}
+                {% set target = [current + imp - margin, max_discharge | float] | min %}
+                {% set target = [target, 0] | max %}
+                {% if target > current %}
+                  {{ [current + step, target] | min }}
+                {% elif target < current %}
+                  {{ [current - step, target] | max }}
+                {% else %}
+                  {{ current }}
+                {% endif %}
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ states('!input number_ladeleistung') | float(0) > 0 }}"
+                sequence:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input number_ladeleistung
+                    data:
+                      value: 0
+          - action: number.set_value
+            target:
+              entity_id: !input number_entladeleistung
+            data:
+              value: "{{ neue_entladeleistung | float(0) }}"
+          - delay:
+              seconds: !input delay_discharge_seconds
+
+      # Einspeisung hoch, Entladeleistung an → Entladeleistung reduzieren
+      - conditions:
+          - condition: template
+            value_template: "{{ grid_export_w > thresh }}"
+          - condition: template
+            value_template: "{{ gesetzte_entladeleistung > 0 }}"
+        sequence:
+          - variables:
+              discharge_red_step: !input discharge_reduction_step_w
+              neue_entladeleistung: >
+                {% set export = grid_export_w | float %}
+                {% set current = gesetzte_entladeleistung | float %}
+                {% set step = discharge_red_step | float %}
+                {% set margin = margin | float %}
+                {% set target = [current - export - margin, 0] | max %}
+                {{ [current - step, target] | max }}
+          - action: number.set_value
+            target:
+              entity_id: !input number_entladeleistung
+            data:
+              value: "{{ neue_entladeleistung | float(0) }}"
+          - delay:
+              seconds: !input delay_discharge_seconds
+
+      # Bezug oder kein Überschuss → Ladeleistung reduzieren
+      - conditions:
+          - condition: or
+            conditions:
+              - condition: numeric_state
+                entity_id: !input sensor_grid_import
+                above: 0.05
+              - condition: template
+                value_template: "{{ aktueller_ueberschuss_w <= 0 }}"
+        sequence:
+          - condition: template
+            value_template: "{{ gesetzte_ladeleistung > 0 }}"
+          - variables:
+              charge_red_step: !input charge_reduction_step_w
+              neue_ladeleistung: >
+                {% set imp = grid_import_w | float %}
+                {% set current = gesetzte_ladeleistung | float %}
+                {% set step = charge_red_step | float %}
+                {% set margin = margin | float %}
+                {% set target = [current - imp - margin, 0] | max %}
+                {{ [current - step, target] | max }}
+          - action: number.set_value
+            target:
+              entity_id: !input number_ladeleistung
+            data:
+              value: "{{ neue_ladeleistung | float(0) }}"
+          - delay:
+              seconds: !input delay_discharge_seconds
+
+  # Force-Mode: Entladen / Laden / Stopp setzen
+  - variables:
+      force_options: "{{ state_attr('!input select_force_mode', 'options') or [] }}"
+      opt_laden: "{{ 'charge' if 'charge' in force_options else '' }}"
+      opt_halt: "{{ 'stop' if 'stop' in force_options else '' }}"
+      opt_entladen: "{{ 'discharge' if 'discharge' in force_options else '' }}"
+      lade_now: "{{ states('!input number_ladeleistung') | float(0) }}"
+      entlade_now: "{{ states('!input number_entladeleistung') | float(0) }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ grid_import_w > 30 and entlade_now > 5 and
+              (states('!input sensor_soc') | float(0)) > (states('!input input_number_min_soc') | float(0))
+              and opt_entladen != '' and
+              states('!input select_force_mode') != opt_entladen }}
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input select_force_mode
+            data:
+              option: "{{ opt_entladen }}"
+          - action: number.set_value
+            target:
+              entity_id: !input number_ladeleistung
+            data:
+              value: 0
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ grid_export_w > 30 and lade_now > 5 and entlade_now < 0.5 and
+              grid_import_w < 5 and soc_now < max_soc and opt_laden != '' and
+              states('!input select_force_mode') != opt_laden }}
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input select_force_mode
+            data:
+              option: "{{ opt_laden }}"
+          - action: number.set_value
+            target:
+              entity_id: !input number_entladeleistung
+            data:
+              value: 0
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ grid_import_w < 5 and grid_export_w < 5 and lade_now <= 5 and
+              entlade_now <= 5 and opt_halt != '' and
+              states('!input select_force_mode') != opt_halt }}
+        sequence:
+          - action: select.select_option
+            target:
+              entity_id: !input select_force_mode
+            data:
+              option: "{{ opt_halt }}"
+          - action: number.set_value
+            target:
+              entity_id: !input number_ladeleistung
+            data:
+              value: 0
+          - action: number.set_value
+            target:
+              entity_id: !input number_entladeleistung
+            data:
+              value: 0
+
+mode: restart
