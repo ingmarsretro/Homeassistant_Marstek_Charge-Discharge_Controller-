@@ -1,5 +1,63 @@
 # Marstek Venus E3 – Smartes Laden & Entladen per Home Assistant Blueprint
 
+Änderungsbericht — Montag, 13. Juli 2026
+Alle Änderungen betreffen marstek_blueprint _130726_1.yaml (Haupt-Automation für Marstek Lade-/Entladeregler).
+
+1. Min-SOC-Schutz (input_number.marstek_min_soc)
+Problem: Unterhalb von Min-SOC wurde eine weitere Erhöhung der Entladeleistung verhindert, aber der zuletzt gesetzte Entladewert (z. B. 500 W) und Force Mode discharge blieben „eingefroren“. Der SOC konnte weiter sinken (z. B. 12,9 % → 11,1 % bei Min-SOC = 15 %).
+
+Änderungen:
+
+Früher Min-SOC-Block (vor der Hauptlogik): bei soc_now < min_soc → Entladeleistung auf 0; bei Force Mode discharge → Wechsel auf standby/stop und Lade-/Entladeleistung auf 0
+Später Min-SOC-Block (nach der Hauptlogik, vor Force Mode): dieselbe Logik erneut, damit andere Zweige die Entladung nicht aktiv lassen
+SOC-Sensor als Trigger ergänzt, damit der Schutz auch bei SOC-Änderungen reagiert (nicht nur alle 5 s)
+Variable min_soc für einheitliche Vergleiche
+Entladung erhöhen nur bei soc_now > min_soc (Template statt nur numeric_state)
+Entladung reduzieren bei Einspeisung nur bei soc_now >= min_soc
+2. Force Mode: standby-Unterstützung
+Problem: Die Stopp-Option suchte nur nach 'stop'. Marstek Venus nutzt standby, daher wurde Force Mode nicht aus discharge herausgeschaltet.
+
+Änderungen:
+
+opt_halt bevorzugt jetzt standby, Fallback stop
+Blueprint-Beschreibung für standby/stop angepasst
+3. Anti-Pendeln bei Entladung / max. 50 W Netzeinspeisung
+Problem: Sinkt die Last, während der Marstek mit hoher Leistung liefert, blieb die Entladung zu lange hoch und Energie ging ins Netz — Pendeln zwischen Bezug und Einspeisung.
+
+Behobene Ursachen:
+
+Entladeziel war aktuell + Bezug statt am tatsächlichen Verbrauch ausgerichtet
+Der Zweig „Entladung bei Bezug erhöhen“ lief vor dem Export-Reduktionszweig
+Änderungen:
+
+Punkt	Detail
+Lastfolge
+Entladeziel = Bezug − margin, begrenzt auf max. Entladeleistung (nicht aktuell + Bezug)
+Nur erhöhen bei Bedarf
+Erhöhung nur, wenn (Bezug − aktuelle Entladung) > margin
+50-W-Einspeisungsgrenze
+Neuer Schnell-Reduktionszweig bei grid_export > 50 W während Entladung
+Zweig-Reihenfolge
+1) Laden bei Überschuss → 2) Schnell abbauen bei Export > 50 W → 3) Anpassung bei Bezug → 4) Feinregelung bei 10–50 W Export
+Schnellere Reaktion
+2 s Verzögerung beim schnellen Export-Abbau (sonst 4 s)
+Force-Mode-Sperre
+Kein erzwungenes discharge bei grid_export > 50 W oder wenn der Bezug die aktuelle Entladung nicht übersteigt
+Neue Parameter
+max_discharge = 800 W, max_grid_export = 50 W, margin = 10 W
+Blueprint-Eingaben
+Max. Netzeinspeisung bei Entladung (Standard 50 W); Max. Entladeleistung Standard von 1250 auf 800 W geändert
+4. SOC-Sprung-Warnung (Zell-Inbalance)
+Problem: Plötzliche SOC-Sprünge (z. B. 74 % → 100 % in einer Aktualisierung) deuten auf mögliche Zell-Inbalance hin — es gab keine Meldung.
+
+Änderungen:
+
+Erkennung nur bei Zustandsänderung des SOC-Sensors (trigger.from_state vs. soc_now)
+Warnung bei Anstieg ≥ 15 % in einer Aktualisierung, prev ≥ 5 %, vorheriger Zustand gültig
+Persistente Benachrichtigung: Marstek: Zell-Imbalance – SOC-Sprung (ID: marstek_soc_jump_warning)
+Logbucheintrag am SOC-Sensor
+Blueprint-Eingabe: SOC-Sprung Schwelle (%) (Standard 15, Bereich 5–50)
+
 > [update 9.Mar.2026 new relase: marstek_blueprint.yaml published]
 > **new readme files in folder /blueprints/automation/marstek**
 
@@ -172,6 +230,64 @@ Diese Werte kannst du an dein Netzverhalten und deine Wunsch‑Dynamik anpassen.
 This repository provides a **Home Assistant Blueprint** for dynamic regulation of charging and discharging power for the **Marstek Venus E3** battery storage system.
 
 The primary goal is to keep **grid import** and **grid export** as close to 0W as possible — within a configurable **deadband** — while avoiding oscillation.
+
+Change report — Monday, 13 July 2026
+All changes were made to marstek_blueprint _130726_1.yaml (the main Marstek charge/discharge automation).
+
+1. Min-SOC protection (input_number.marstek_min_soc)
+Problem: Below Min-SOC, discharge was blocked from increasing, but existing discharge power (e.g. 500 W) and Force Mode discharge stayed frozen; SOC could drop further (e.g. 12.9 % → 11.1 % with Min-SOC = 15 %).
+
+Changes:
+
+Early Min-SOC block (before main logic): if soc_now < min_soc → set Entladeleistung to 0; if Force Mode is discharge → switch to standby/stop and zero charge/discharge
+Late Min-SOC block (after main logic, before Force Mode): same logic again so main branches cannot leave discharge active
+SOC sensor trigger added so protection reacts on SOC changes, not only on the 5 s timer
+min_soc variable added for consistent comparisons
+Discharge increase only when soc_now > min_soc (template instead of numeric_state only)
+Discharge reduction on export only when soc_now >= min_soc
+2. Force Mode: standby support
+Problem: Halt option only looked for 'stop'; Marstek Venus uses standby, so Force Mode never switched out of discharge.
+
+Changes:
+
+opt_halt now prefers standby, falls back to stop
+Blueprint description updated for standby/stop
+3. Anti-swing discharge / max 50 W grid export
+Problem: When load dropped while Marstek was delivering high power, discharge stayed high and energy went to the grid; swinging between import/export.
+
+Root causes fixed:
+
+Discharge target used current + import instead of matching consumption
+Import-increase branch ran before export-reduction
+Changes:
+
+Item	Detail
+Load-following target
+Discharge target = import − margin, capped at max discharge (not current + import)
+Increase only when needed
+Increase only if (import − current_discharge) > margin
+50 W export cap
+New fast-reduction branch when grid_export > 50 W while discharging
+Branch order
+1) Charge surplus → 2) Fast cut if export > 50 W → 3) Adjust on import → 4) Gentle trim 10–50 W export
+Faster reaction
+2 s delay on fast export cut (vs 4 s elsewhere)
+Force Mode guard
+No forced discharge while grid_export > 50 W or when import does not exceed current discharge
+New parameters
+max_discharge = 800 W, max_grid_export = 50 W, margin = 10 W
+Blueprint inputs
+Max. Netzeinspeisung bei Entladung (default 50 W); Max. Entladeleistung default changed from 1250 → 800 W
+4. SOC jump warning (cell imbalance)
+Problem: Sudden SOC jumps (e.g. 74 % → 100 % in one update) indicate possible cell imbalance; no alert existed.
+
+Changes:
+
+Detection only on SOC sensor state change (uses trigger.from_state vs soc_now)
+Warning when upward jump ≥ 15 % in one update, prev ≥ 5 %, previous state valid
+Persistent notification: Marstek: Zell-Imbalance – SOC-Sprung (ID: marstek_soc_jump_warning)
+Logbook entry on the SOC sensor
+Blueprint input: SOC-Sprung Schwelle (%) (default 15, range 5–50)
 
 > [!IMPORTANT]
 > **Prerequisite:** This blueprint requires the Modbus TCP integration for Marstek Venus: 
