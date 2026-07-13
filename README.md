@@ -96,8 +96,8 @@ Ziel ist es, den **Netzbezug** und die **Netzeinspeisung** möglichst nahe bei 0
 
 ## Dateien
 
-- `blueprints/automation/marstek/marstek_lade_entlade_force_mode.yaml`  
-  → Das eigentliche Blueprint für Home Assistant.
+- `blueprints/automation/marstek/marstek_blueprint _130726_1.yaml`  
+  → Das Blueprint für Home Assistant.
 
 ---
 
@@ -123,7 +123,7 @@ Ziel ist es, den **Netzbezug** und die **Netzeinspeisung** möglichst nahe bei 0
 ## Installation des Blueprints
 
 1. Kopiere die Blueprint‑Datei in deinen Home‑Assistant‑Blueprint‑Ordner, z.B.:
-blueprints/automation/marstek/marstek_lade_entlade_force_mode.yaml
+blueprints/automation/marstek/marstek_blueprint _130726_1.yaml
    
 2. Starte Home Assistant neu oder lade die Blueprints neu.
 3. Gehe zu  
@@ -325,7 +325,7 @@ Blueprint input: SOC-Sprung Schwelle (%) (default 15, range 5–50)
 ## Installation
 
 1. Copy the blueprint file to your Home Assistant directory:
-   `blueprints/automation/marstek/marstek_lade_entlade_force_mode.yaml`
+   `blueprints/automation/marstek/marstek_blueprint _130726_1.yaml`
 2. Reload your Blueprints or restart Home Assistant.
 3. Navigate to **Settings → Automations & Scenes → Blueprints**.
 4. Find **"Marstek Storage: Charge/Discharge Control (Force Mode) – Smart Meter"** and click **Create Automation**.
